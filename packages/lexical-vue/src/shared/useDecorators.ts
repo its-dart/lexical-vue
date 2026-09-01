@@ -10,6 +10,12 @@ export function useDecorators(editor: LexicalEditor) {
       decorators.value = nextDecorators as Record<string, DefineComponent>
     })
 
+    // Catch any decorators that were computed between setup and onMounted.
+    // ContentEditableElement.setRootElement() triggers reconciliation in its
+    // own onMounted (which fires before this one), so by the time we get here
+    // the decorators are already populated — we just missed the notification.
+    decorators.value = editor.getDecorators() as Record<string, DefineComponent>
+
     onUnmounted(() => {
       unregister()
     })
