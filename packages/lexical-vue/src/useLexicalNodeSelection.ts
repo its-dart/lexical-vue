@@ -12,7 +12,7 @@ import { readonly, ref, toValue, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 
 function isNodeSelected(editor: LexicalEditor, key: NodeKey): boolean {
-  return editor.getEditorState().read(() => {
+  return editor.read('latest', () => {
     const node = $getNodeByKey(key)
     if (node === null)
       return false

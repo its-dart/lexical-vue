@@ -14,6 +14,7 @@ import {
   CLICK_COMMAND,
   COMMAND_PRIORITY_LOW,
   FORMAT_ELEMENT_COMMAND,
+  getComposedEventTarget,
 } from 'lexical'
 import { useTemplateRef, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
@@ -35,7 +36,7 @@ export function BlockWithAlignableContents(props: {
       editor.registerCommand<ElementFormatType>(
         FORMAT_ELEMENT_COMMAND,
         (formatType) => {
-          if (isSelected) {
+          if (isSelected.value) {
             const selection = $getSelection()
 
             if ($isNodeSelection(selection)) {
@@ -67,7 +68,7 @@ export function BlockWithAlignableContents(props: {
       editor.registerCommand<MouseEvent>(
         CLICK_COMMAND,
         (event) => {
-          if (event.target === containerRef.value) {
+          if (getComposedEventTarget(event) === containerRef.value) {
             event.preventDefault()
             if (!event.shiftKey)
               clearSelection()

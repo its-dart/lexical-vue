@@ -1,3 +1,4 @@
+import { signal } from '@lexical/extension'
 import {
   $isScrollableTablesActive,
   registerTableCellUnmergeTransform,
@@ -5,9 +6,9 @@ import {
   registerTableSelectionObserver,
   setScrollableTablesActive,
   TableCellNode,
-  TableNode,
 } from '@lexical/table'
 
+import { $fullReconcile } from 'lexical'
 import { onMounted, onUnmounted, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 
@@ -29,6 +30,12 @@ export interface TablePluginProps {
    * When `true` (default `false`), tables will be wrapped in a `<div>` to enable horizontal scrolling
    */
   hasHorizontalScroll?: boolean
+  /**
+   * When `true` (default `false`), nested tables will be allowed.
+   *
+   * @experimental Nested tables are not officially supported.
+   */
+  hasNestedTables?: boolean
 }
 
 export function TablePlugin({
@@ -36,21 +43,27 @@ export function TablePlugin({
   hasCellBackgroundColor = true,
   hasTabHandler = true,
   hasHorizontalScroll = false,
+  hasNestedTables = false,
 }: TablePluginProps) {
   const editor = useLexicalComposer()
+  const hasNestedTablesSignal = signal(hasNestedTables)
+
+  watchEffect(() => {
+    hasNestedTablesSignal.value = hasNestedTables
+  })
 
   watchEffect(() => {
     const hadHorizontalScroll = $isScrollableTablesActive(editor)
     if (hadHorizontalScroll !== hasHorizontalScroll) {
       setScrollableTablesActive(editor, hasHorizontalScroll)
-      // Registering the transform has the side-effect of marking all existing
-      // TableNodes as dirty. The handler is immediately unregistered.
-      editor.registerNodeTransform(TableNode, () => {})()
+      editor.update($fullReconcile)
     }
   })
 
   onMounted(() => {
-    const unregister = registerTablePlugin(editor)
+    const unregister = registerTablePlugin(editor, {
+      hasNestedTables: hasNestedTablesSignal,
+    })
 
     onUnmounted(unregister)
   })

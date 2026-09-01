@@ -1,3 +1,4 @@
+import type { CanIndentPredicate } from '@lexical/extension'
 import { registerTabIndentation } from '@lexical/extension'
 import { watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
@@ -9,11 +10,12 @@ import { useLexicalComposer } from './LexicalComposer.vine'
  */
 export function TabIndentationPlugin(props: {
   maxIndent?: number
+  canIndent?: CanIndentPredicate
 }) {
   const editor = useLexicalComposer()
 
   watchEffect((onInvalidate) => {
-    const unregister = registerTabIndentation(editor, props.maxIndent)
+    const unregister = registerTabIndentation(editor, props.maxIndent, props.canIndent)
 
     onInvalidate(unregister)
   })

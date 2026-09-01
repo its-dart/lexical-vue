@@ -1,11 +1,10 @@
 import type { BaseBinding, Binding, BindingV2, Provider, UserState } from '@lexical/yjs'
 
 import type { Klass, LexicalNode } from 'lexical'
-import type { Ref } from 'vue'
 import type { Doc } from 'yjs'
 import type { InitialEditorStateType } from './types'
-import { createBinding } from '@lexical/yjs'
-import { ref, watchEffect } from 'vue'
+import { createYjsBinding } from '@lexical/yjs'
+import { onUnmounted, shallowRef, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 import { collaborationContext } from './shared/useCollaborationContext'
 import {
@@ -17,8 +16,8 @@ import {
 type AnyBinding = Binding | BindingV2
 interface SyncCursorPositionsOptions {
   getAwarenessStates?: (binding: BaseBinding, provider: Provider) => Map<number, UserState>
+  selectionHighlight?: boolean
 }
-
 interface CollaborationPluginProps {
   id: string
   providerFactory: (id: string, yjsDocMap: Map<string, Doc>) => Provider
@@ -31,12 +30,11 @@ interface CollaborationPluginProps {
   // `awarenessData` parameter allows arbitrary data to be added to the awareness.
   awarenessData?: object
   syncCursorPositionsFn?: (binding: AnyBinding, provider: Provider, options?: SyncCursorPositionsOptions) => void
+  selectionHighlight?: boolean
+  rootName?: string
 }
 
 export function CollaborationPlugin(props: CollaborationPluginProps) {
-  const isBindingInitialized = ref(false)
-  const isProviderInitialized = ref(false)
-
   // Set username and cursor color
   watchEffect(() => {
     if (props.username !== undefined)
@@ -58,58 +56,29 @@ export function CollaborationPlugin(props: CollaborationPluginProps) {
     })
   })
 
-  const provider = ref() as Ref<Provider>
-  const doc = ref() as Ref<Doc>
+  const id = props.id
+  const yjsDocMap = collaborationContext.value.yjsDocMap
+  const provider = shallowRef(props.providerFactory(id, yjsDocMap))
+  const doc = shallowRef(yjsDocMap.get(id)!)
+  const binding = shallowRef(createYjsBinding({
+    doc: doc.value,
+    docMap: yjsDocMap,
+    editor,
+    excludedProperties: props.excludedProperties,
+    id,
+    rootName: props.rootName,
+  }))
 
-  watchEffect((onInvalidate) => {
-    if (isProviderInitialized.value) {
-      return
-    }
-
-    isProviderInitialized.value = true
-
-    const newProvider = props.providerFactory(props.id, collaborationContext.value.yjsDocMap)
-    provider.value = newProvider
-    doc.value = collaborationContext.value.yjsDocMap.get(props.id)!
-
-    onInvalidate(() => {
-      newProvider.disconnect()
-    })
-  })
-
-  const binding = ref() as Ref<Binding>
-
-  watchEffect((onInvalidate) => {
-    if (!provider.value) {
-      return
-    }
-
-    if (isBindingInitialized.value) {
-      return
-    }
-
-    isBindingInitialized.value = true
-
-    const newBinding = createBinding(
-      editor,
-      provider.value,
-      props.id,
-      doc.value || collaborationContext.value.yjsDocMap.get(props.id),
-      collaborationContext.value.yjsDocMap,
-      props.excludedProperties,
-    )
-    binding.value = newBinding
-
-    onInvalidate(() => {
-      newBinding.root.destroy(newBinding)
-    })
+  onUnmounted(() => {
+    binding.value.root.destroy(binding.value)
+    provider.value.disconnect()
   })
 
   const cursors = useYjsCollaboration(
     editor,
-    () => props.id,
+    () => id,
     provider,
-    () => collaborationContext.value.yjsDocMap,
+    () => yjsDocMap,
     () => collaborationContext.value.name,
     () => collaborationContext.value.color,
     () => props.shouldBootstrap,
@@ -119,10 +88,11 @@ export function CollaborationPlugin(props: CollaborationPluginProps) {
     () => props.initialEditorState,
     () => props.awarenessData,
     () => props.syncCursorPositionsFn,
+    () => props.selectionHighlight,
   )
 
   useYjsHistory(editor, binding)
-  useYjsFocusTracking(editor, provider, () => collaborationContext.value.name, () => collaborationContext.value.color, props.awarenessData)
+  useYjsFocusTracking(editor, provider, () => collaborationContext.value.name, () => collaborationContext.value.color, () => props.awarenessData)
 
   return vine`
     <component :is="cursors" />

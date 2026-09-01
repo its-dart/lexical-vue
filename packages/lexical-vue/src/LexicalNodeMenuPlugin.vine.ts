@@ -47,14 +47,16 @@ export function NodeMenuPlugin<TOption extends MenuOption>(props: NodeMenuPlugin
   )
 
   function closeNodeMenu() {
+    const wasOpen = resolution.value !== null
     setResolution(null)
-    if (resolution.value !== null)
+    if (wasOpen)
       emit('close')
   }
 
   function openNodeMenu(res: MenuResolution) {
+    const wasClosed = resolution.value === null
     setResolution(res)
-    if (resolution.value === null)
+    if (wasClosed)
       emit('open', res)
   }
 

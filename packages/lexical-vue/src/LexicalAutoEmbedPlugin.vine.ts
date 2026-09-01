@@ -20,7 +20,7 @@ import {
   PASTE_TAG,
 } from 'lexical'
 
-import { computed, ref, watchEffect } from 'vue'
+import { computed, getCurrentInstance, onUpdated, ref, watchEffect } from 'vue'
 
 import { useLexicalComposer } from './LexicalComposer.vine'
 import { NodeMenuPlugin } from './LexicalNodeMenuPlugin.vine'
@@ -78,13 +78,29 @@ interface LexicalAutoEmbedPluginProps<TEmbedConfig extends EmbedConfig> {
 }
 
 export function LexicalAutoEmbedPlugin<TEmbedConfig extends EmbedConfig>(props: LexicalAutoEmbedPluginProps<TEmbedConfig>) {
+  const instance = getCurrentInstance()
   const editor = useLexicalComposer()
   const nodeKey = ref<NodeKey | null>(null)
   const activeEmbedConfig = ref<any>(null) // Should be <TEmbedConfig | null> but we need to fix the type inference
 
   const emit = vineEmits<{
-    openEmbedModalForConfig: [embedConfig: TEmbedConfig]
+    openEmbedModalForConfig?: [embedConfig: TEmbedConfig]
   }>()
+
+  function hasOpenEmbedModalListenerProp() {
+    const vnodeProps = instance?.vnode.props
+    return vnodeProps != null
+      && (
+        'onOpenEmbedModalForConfig' in vnodeProps
+        || 'onOpenEmbedModalForConfigOnce' in vnodeProps
+      )
+  }
+
+  const hasOpenEmbedModalListener = ref(hasOpenEmbedModalListenerProp())
+
+  onUpdated(() => {
+    hasOpenEmbedModalListener.value = hasOpenEmbedModalListenerProp()
+  })
 
   function reset() {
     nodeKey.value = null
@@ -92,7 +108,7 @@ export function LexicalAutoEmbedPlugin<TEmbedConfig extends EmbedConfig>(props: 
   }
 
   async function checkIfLinkNodeIsEmbeddable(key: NodeKey) {
-    const url = editor.getEditorState().read(() => {
+    const url = editor.read('latest', () => {
       const linkNode = $getNodeByKey(key)
       if ($isLinkNode(linkNode)) {
         return linkNode.getURL()
@@ -141,6 +157,10 @@ export function LexicalAutoEmbedPlugin<TEmbedConfig extends EmbedConfig>(props: 
   })
 
   watchEffect((onInvalidate) => {
+    if (!hasOpenEmbedModalListener.value) {
+      return
+    }
+
     const unregister = editor.registerCommand(
       INSERT_EMBED_COMMAND,
       (embedConfigType: TEmbedConfig['type']) => {
@@ -160,9 +180,11 @@ export function LexicalAutoEmbedPlugin<TEmbedConfig extends EmbedConfig>(props: 
   })
 
   async function embedLinkViaActiveEmbedConfig() {
-    if (activeEmbedConfig.value != null && nodeKey.value != null) {
-      const linkNode = editor.getEditorState().read(() => {
-        const node = $getNodeByKey(nodeKey.value!)
+    const embedConfig = activeEmbedConfig.value
+    const activeNodeKey = nodeKey.value
+    if (embedConfig != null && activeNodeKey != null) {
+      const linkNode = editor.read('latest', () => {
+        const node = $getNodeByKey(activeNodeKey)
         if ($isLinkNode(node))
           return node
 
@@ -171,14 +193,14 @@ export function LexicalAutoEmbedPlugin<TEmbedConfig extends EmbedConfig>(props: 
 
       if ($isLinkNode(linkNode)) {
         const result = await Promise.resolve(
-          activeEmbedConfig.value.parseUrl(linkNode.__url),
+          embedConfig.parseUrl(linkNode.__url),
         )
         if (result != null) {
           editor.update(() => {
             if (!$getSelection())
               linkNode.selectEnd()
 
-            activeEmbedConfig.value.insertNode(editor, result)
+            embedConfig.insertNode(editor, result)
             if (linkNode.isAttached())
               linkNode.remove()
           })

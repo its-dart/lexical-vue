@@ -6,17 +6,19 @@ import { onMounted, onUnmounted, readonly, ref } from 'vue'
 function canShowPlaceholderFromCurrentEditorState(
   editor: LexicalEditor,
 ): boolean {
-  const currentCanShowPlaceholder = editor
-    .getEditorState()
-    .read($canShowPlaceholderCurry(editor.isComposing()))
+  const currentCanShowPlaceholder = editor.read(
+    'latest',
+    $canShowPlaceholderCurry(editor.isComposing()),
+  )
 
   return currentCanShowPlaceholder
 }
 
 export function useCanShowPlaceholder(editor: LexicalEditor) {
-  const initialState = editor
-    .getEditorState()
-    .read($canShowPlaceholderCurry(editor.isComposing()))
+  const initialState = editor.read(
+    'latest',
+    $canShowPlaceholderCurry(editor.isComposing()),
+  )
 
   const canShowPlaceholder = ref(initialState)
 

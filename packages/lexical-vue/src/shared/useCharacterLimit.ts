@@ -7,9 +7,11 @@ import {
   OverflowNode,
 } from '@lexical/overflow'
 import { $rootTextContent } from '@lexical/text'
-import { $dfs, mergeRegister } from '@lexical/utils'
+import { $dfsWithSlots, $unwrapNode, mergeRegister } from '@lexical/utils'
 import {
+  $findMatchingParent,
   $getSelection,
+  $getSlotHost,
   $isElementNode,
   $isLeafNode,
   $isRangeSelection,
@@ -17,6 +19,7 @@ import {
   $setSelection,
   COMMAND_PRIORITY_LOW,
   DELETE_CHARACTER_COMMAND,
+  HISTORY_MERGE_TAG,
 } from 'lexical'
 
 import invariant from 'tiny-invariant'
@@ -45,17 +48,17 @@ export function useCharacterLimit(
       remainingCharacters = (_characters: number): void => {},
     } = toValue(optional)
 
-    let text = editor.getEditorState().read($rootTextContent)
+    let text = editor.read('latest', $rootTextContent)
     let lastComputedTextLength = 0
 
     const unregister = mergeRegister(
       editor.registerTextContentListener((currentText: string) => {
         text = currentText
       }),
-      editor.registerUpdateListener(({ dirtyLeaves }) => {
+      editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
         const isComposing = editor.isComposing()
-        const hasDirtyLeaves = dirtyLeaves.size > 0
-        if (isComposing || !hasDirtyLeaves)
+        const hasContentChanges = dirtyLeaves.size > 0 || dirtyElements.size > 0
+        if (isComposing || !hasContentChanges)
           return
 
         const textLength = strlen(text)
@@ -72,7 +75,7 @@ export function useCharacterLimit(
               $wrapOverflowedNodes(offset)
             },
             {
-              tag: 'history-merge',
+              tag: HISTORY_MERGE_TAG,
             },
           )
         }
@@ -150,13 +153,24 @@ function findOffset(
   return offsetUtf16
 }
 
-function $wrapOverflowedNodes(offset: number): void {
-  const dfsNodes = $dfs()
+export function $wrapOverflowedNodes(offset: number): void {
+  const dfsNodes = $dfsWithSlots()
   const dfsNodesLength = dfsNodes.length
   let accumulatedLength = 0
 
   for (let i = 0; i < dfsNodesLength; i += 1) {
     const { node } = dfsNodes[i]
+
+    const prevSibling = node.getPreviousSibling()
+    if ($isElementNode(prevSibling) && !prevSibling.isInline()) {
+      accumulatedLength += 2
+    }
+
+    const isSlotValueLeaf = $isLeafNode(node) && $getSlotHost(node) !== null
+    const needsOverflowParent
+      = $isLeafNode(node)
+        && !isSlotValueLeaf
+        && !$findMatchingParent(node, $isOverflowNode)
 
     if ($isOverflowNode(node)) {
       const previousLength = accumulatedLength
@@ -199,7 +213,10 @@ function $wrapOverflowedNodes(offset: number): void {
           $unwrapNode(node)
       }
     }
-    else if ($isLeafNode(node)) {
+    else if (isSlotValueLeaf) {
+      accumulatedLength += node.getTextContentSize()
+    }
+    else if (needsOverflowParent) {
       const previousAccumulatedLength = accumulatedLength
       accumulatedLength += node.getTextContentSize()
 
@@ -226,7 +243,11 @@ function $wrapOverflowedNodes(offset: number): void {
         if (previousSelection !== null)
           $setSelection(previousSelection)
 
-        mergePrevious(overflowNode)
+        $mergePrevious(overflowNode)
+        const nextNode = overflowNode.getNextSibling()
+        if ($isOverflowNode(nextNode)) {
+          $mergePrevious(nextNode)
+        }
       }
     }
   }
@@ -234,23 +255,12 @@ function $wrapOverflowedNodes(offset: number): void {
 
 function $wrapNode(node: LexicalNode): OverflowNode {
   const overflowNode = $createOverflowNode()
-  node.insertBefore(overflowNode)
+  node.replace(overflowNode)
   overflowNode.append(node)
   return overflowNode
 }
 
-function $unwrapNode(node: OverflowNode): LexicalNode | null {
-  const children = node.getChildren()
-  const childrenLength = children.length
-
-  for (let i = 0; i < childrenLength; i++)
-    node.insertBefore(children[i])
-
-  node.remove()
-  return childrenLength > 0 ? children[childrenLength - 1] : null
-}
-
-export function mergePrevious(overflowNode: OverflowNode): void {
+export function $mergePrevious(overflowNode: OverflowNode): void {
   const previousNode = overflowNode.getPreviousSibling()
 
   if (!$isOverflowNode(previousNode))
@@ -274,7 +284,7 @@ export function mergePrevious(overflowNode: OverflowNode): void {
     const anchor = selection.anchor
     const anchorNode = anchor.getNode()
     const focus = selection.focus
-    const focusNode = anchor.getNode()
+    const focusNode = focus.getNode()
 
     if (anchorNode.is(previousNode)) {
       anchor.set(overflowNode.getKey(), anchor.offset, 'element')

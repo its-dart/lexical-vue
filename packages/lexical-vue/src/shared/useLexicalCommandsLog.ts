@@ -1,4 +1,5 @@
 import type { LexicalCommand, LexicalEditor } from 'lexical'
+import type { Ref } from 'vue'
 import { COMMAND_PRIORITY_CRITICAL } from 'lexical'
 import { onMounted, onUnmounted, readonly, ref } from 'vue'
 
@@ -46,7 +47,7 @@ export function registerLexicalCommandLogger(
 
 export function useLexicalCommandsLog(
   editor: LexicalEditor,
-) {
+): Readonly<Ref<LexicalCommandLog>> {
   const loggedCommands = ref<LexicalCommandLog>([])
 
   onMounted(() => {

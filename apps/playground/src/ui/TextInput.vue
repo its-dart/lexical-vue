@@ -14,7 +14,7 @@ const model = defineModel()
 </script>
 
 <template>
-  <div className="Input__wrapper">
+  <div class="Input__wrapper">
     <label class="Input__label">{{ label }}</label>
     <input v-model="model" :type="type" class="Input__input" :placeholder="placeholder">
   </div>

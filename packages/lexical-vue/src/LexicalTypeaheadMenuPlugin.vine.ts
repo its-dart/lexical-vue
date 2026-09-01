@@ -6,44 +6,17 @@ import type {
   TextNode,
 } from 'lexical'
 import type { MenuRenderProps, MenuResolution, MenuTextMatch, TriggerFn } from './shared/LexicalMenu.vine'
-import { $getSelection, $isRangeSelection, $isTextNode, COMMAND_PRIORITY_LOW, createCommand } from 'lexical'
-import { nextTick, ref, watchEffect } from 'vue'
+import { getScrollParent as getScrollParent_ } from '@lexical/utils'
+import { $getSelection, $isRangeSelection, $isTextNode, createCommand, getDOMSelection, getDOMSelectionPoints } from 'lexical'
+import { computed, getCurrentInstance, nextTick, onUpdated, ref, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 import { LexicalMenu, MenuOption, useMenuAnchorRef } from './shared/LexicalMenu.vine'
 
 export const PUNCTUATION
   = '\\.,\\+\\*\\?\\$\\@\\|#{}\\(\\)\\^\\-\\[\\]\\\\/!%\'"~=<>_:;'
 
-// Got from https://stackoverflow.com/a/42543908/2013580
-export function getScrollParent(
-  element: HTMLElement,
-  includeHidden: boolean,
-): HTMLElement | HTMLBodyElement {
-  let style = getComputedStyle(element)
-  const excludeStaticParent = style.position === 'absolute'
-  const overflowRegex = includeHidden
-    ? /(auto|scroll|hidden)/
-    : /(auto|scroll)/
-  if (style.position === 'fixed')
-    return document.body
-
-  for (
-    let parent: HTMLElement | null = element;
-    // eslint-disable-next-line no-cond-assign
-    (parent = parent.parentElement);
-
-  ) {
-    style = getComputedStyle(parent)
-    if (excludeStaticParent && style.position === 'static')
-      continue
-
-    if (
-      overflowRegex.test(style.overflow + style.overflowY + style.overflowX)
-    )
-      return parent
-  }
-  return document.body
-}
+/** @deprecated Moved to `@lexical/utils`. Import `getScrollParent` from there. */
+export const getScrollParent = getScrollParent_
 
 export { useDynamicPositioning } from './shared/LexicalMenu.vine'
 
@@ -103,6 +76,22 @@ export type { MenuResolution, MenuTextMatch, TriggerFn }
 export { MenuOption }
 
 export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: TypeaheadMenuPluginProps<TOption>) {
+  const instance = getCurrentInstance()
+  const hasPreselectFirstItem = ref(hasPreselectFirstItemProp())
+
+  function hasPreselectFirstItemProp() {
+    const vnodeProps = instance?.vnode.props
+    return vnodeProps != null
+      && ('preselectFirstItem' in vnodeProps || 'preselect-first-item' in vnodeProps)
+  }
+
+  onUpdated(() => {
+    hasPreselectFirstItem.value = hasPreselectFirstItemProp()
+  })
+
+  const shouldPreselectFirstItem = computed(() => hasPreselectFirstItem.value
+    ? props.preselectFirstItem
+    : true)
   const editor = useLexicalComposer()
   const resolution = ref<MenuResolution | null>(null)
 
@@ -130,14 +119,38 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
   )
 
   function closeTypeahead() {
-    setResolution(null)
-    if (resolution.value !== null)
-      emit('close')
+    if (resolution.value === null) {
+      return
+    }
+
+    const finish = () => setResolution(null)
+    const onClose = instance?.vnode.props?.onClose as
+      | (() => void | PromiseLike<void>)
+      | Array<() => void | PromiseLike<void>>
+      | undefined
+    let result: PromiseLike<unknown> | null = null
+    try {
+      if (Array.isArray(onClose)) {
+        result = Promise.all(onClose.map(listener => listener()))
+      }
+      else {
+        result = onClose?.() ?? null
+      }
+    }
+    finally {
+      if (result) {
+        result.then(finish, finish)
+      }
+      else {
+        finish()
+      }
+    }
   }
 
   function openTypeahead(res: MenuResolution) {
+    const wasClosed = resolution.value === null
     setResolution(res)
-    if (resolution.value === null)
+    if (wasClosed)
       emit('open', res)
   }
 
@@ -158,14 +171,16 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
     leadOffset: number,
     range: Range,
     editorWindow: Window,
+    rootElement: HTMLElement | null,
   ): boolean {
-    const domSelection = editorWindow.getSelection()
+    const domSelection = getDOMSelection(editorWindow)
     if (domSelection === null || !domSelection.isCollapsed)
       return false
 
-    const anchorNode = domSelection.anchorNode
+    const points = getDOMSelectionPoints(domSelection, rootElement)
+    const anchorNode = points.anchorNode
     const startOffset = leadOffset
-    const endOffset = domSelection.anchorOffset
+    const endOffset = points.anchorOffset
 
     if (anchorNode == null || endOffset == null)
       return false
@@ -183,7 +198,7 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
 
   function getQueryTextForSearch(editor: LexicalEditor): string | null {
     let text = null
-    editor.getEditorState().read(() => {
+    editor.read('latest', () => {
       const selection = $getSelection()
       if (!$isRangeSelection(selection))
         return
@@ -200,7 +215,7 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
     if (offset !== 0)
       return false
 
-    return editor.getEditorState().read(() => {
+    return editor.read('latest', () => {
       const selection = $getSelection()
       if ($isRangeSelection(selection)) {
         const anchor = selection.anchor
@@ -215,9 +230,13 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
   watchEffect((onInvalidate) => {
     const updateListener = () => {
     // Check if editor is in read-only mode
-      editor.getEditorState().read(() => {
+      editor.read('latest', () => {
         if (!editor.isEditable()) {
           closeTypeahead()
+          return
+        }
+
+        if (editor.isComposing()) {
           return
         }
 
@@ -247,8 +266,9 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
             match.leadOffset,
             range,
             editorWindow,
+            editor.getRootElement(),
           )
-          if (isRangePositioned !== null) {
+          if (isRangePositioned) {
             nextTick(() => openTypeahead({
               getRect: () => range.getBoundingClientRect(),
               match,
@@ -286,7 +306,8 @@ export function TypeaheadMenuPlugin<TOption extends MenuOption>(props: Typeahead
       :resolution
       :options
       should-split-node-with-query
-      :command-priority="commandPriority ?? (COMMAND_PRIORITY_LOW as unknown as CommandListenerPriority)"
+      :command-priority
+      :preselect-first-item="shouldPreselectFirstItem"
       :close="closeTypeahead"
       @select-option="emit('selectOption', $event)"
       v-slot="slotProps"
