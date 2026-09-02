@@ -1,8 +1,8 @@
 import type { CommandListenerPriority, LexicalCommand, LexicalEditor, TextNode } from 'lexical'
-import type { Component, ComponentPublicInstance, Ref } from 'vue'
-import { CAN_USE_DOM, mergeRegister } from '@lexical/utils'
-import { $getSelection, $isRangeSelection, createCommand, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ENTER_COMMAND, KEY_ESCAPE_COMMAND, KEY_TAB_COMMAND } from 'lexical'
-import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
+import type { Component, ComponentPublicInstance, Ref, VNode } from 'vue'
+import { CAN_USE_DOM, getScrollParent, mergeRegister } from '@lexical/utils'
+import { $getSelection, $isRangeSelection, COMMAND_PRIORITY_LOW, createCommand, getDOMShadowRoots, getRootOwnerDocument, isDOMShadowRoot, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ENTER_COMMAND, KEY_ESCAPE_COMMAND, KEY_TAB_COMMAND, registerEventListener } from 'lexical'
+import { computed, getCurrentInstance, onUnmounted, onUpdated, ref, watch, watchEffect } from 'vue'
 import { useLexicalComposer } from '../LexicalComposer.vine'
 
 export type MenuRenderFn<TOption extends MenuOption> = (
@@ -33,6 +33,8 @@ export const PUNCTUATION
 export class MenuOption {
   key: string
   ref: HTMLElement | null
+  icon?: VNode
+  title?: VNode | string
 
   constructor(key: string) {
     this.key = key
@@ -56,44 +58,15 @@ export interface MenuRenderProps<TOption extends MenuOption> {
   matchingString: string | null
 }
 
-// Got from https://stackoverflow.com/a/42543908/2013580
-export function getScrollParent(
-  element: HTMLElement,
-  includeHidden: boolean,
-): HTMLElement | HTMLBodyElement {
-  let style = getComputedStyle(element)
-  const excludeStaticParent = style.position === 'absolute'
-  const overflowRegex = includeHidden
-    ? /(auto|scroll|hidden)/
-    : /(auto|scroll)/
-  if (style.position === 'fixed')
-    return document.body
-
-  for (
-    let parent: HTMLElement | null = element;
-    // eslint-disable-next-line no-cond-assign
-    (parent = parent.parentElement);
-
-  ) {
-    style = getComputedStyle(parent)
-    if (excludeStaticParent && style.position === 'static')
-      continue
-
-    if (
-      overflowRegex.test(style.overflow + style.overflowY + style.overflowX)
-    )
-      return parent
-  }
-  return document.body
-}
-
 function isTriggerVisibleInNearestScrollContainer(
   targetElement: HTMLElement,
   containerElement: HTMLElement,
 ): boolean {
   const tRect = targetElement.getBoundingClientRect()
   const cRect = containerElement.getBoundingClientRect()
-  return tRect.top > cRect.top && tRect.top < cRect.bottom
+  const visibilityMargin = 6
+  return tRect.top >= cRect.top - visibilityMargin
+    && tRect.top <= cRect.bottom + visibilityMargin
 }
 
 // Reposition the menu on scroll, window resize, and element resize.
@@ -107,6 +80,7 @@ export function useDynamicPositioning(
 
   watchEffect((onInvalidate) => {
     if (targetElement.value != null && resolution.value != null) {
+      const target = targetElement.value
       const rootElement = editor.getRootElement()
       const rootScrollParent
         = rootElement != null
@@ -114,7 +88,7 @@ export function useDynamicPositioning(
           : document.body
       let ticking = false
       let previousIsInView = isTriggerVisibleInNearestScrollContainer(
-        targetElement.value,
+        target,
         rootScrollParent,
       )
       const handleScroll = function () {
@@ -126,7 +100,7 @@ export function useDynamicPositioning(
           ticking = true
         }
         const isInView = isTriggerVisibleInNearestScrollContainer(
-          targetElement.value!,
+          target,
           rootScrollParent,
         )
         if (isInView !== previousIsInView) {
@@ -136,17 +110,20 @@ export function useDynamicPositioning(
         }
       }
       const resizeObserver = new ResizeObserver(onReposition)
-      window.addEventListener('resize', onReposition)
-      document.addEventListener('scroll', handleScroll, {
-        capture: true,
-        passive: true,
-      })
-      resizeObserver.observe(targetElement.value)
-      onInvalidate(() => {
-        resizeObserver.unobserve(targetElement.value!)
-        window.removeEventListener('resize', onReposition)
-        document.removeEventListener('scroll', handleScroll, true)
-      })
+      const enclosingShadowRoots = getDOMShadowRoots(rootElement ?? target)
+      resizeObserver.observe(target)
+      onInvalidate(mergeRegister(
+        registerEventListener(window, 'resize', onReposition),
+        registerEventListener(document, 'scroll', handleScroll, {
+          capture: true,
+          passive: true,
+        }),
+        ...enclosingShadowRoots.map(root => registerEventListener(root, 'scroll', handleScroll, {
+          capture: true,
+          passive: true,
+        })),
+        () => resizeObserver.unobserve(target),
+      ))
     }
   })
 }
@@ -169,18 +146,33 @@ export const SCROLL_TYPEAHEAD_OPTION_INTO_VIEW_COMMAND: LexicalCommand<{
   option: MenuOption
 }> = createCommand('SCROLL_TYPEAHEAD_OPTION_INTO_VIEW_COMMAND')
 
+function resolveMenuParent(editor: LexicalEditor): HTMLElement | ShadowRoot | undefined {
+  if (!CAN_USE_DOM) {
+    return undefined
+  }
+  const rootElement = editor.getRootElement()
+  if (rootElement !== null) {
+    const root = rootElement.getRootNode()
+    return isDOMShadowRoot(root) ? root : rootElement.ownerDocument.body
+  }
+  return document.body
+}
+
 export function useMenuAnchorRef(
   resolution: Ref<MenuResolution | null>,
   setResolution: (r: MenuResolution | null) => void,
   className?: string,
-  parent: HTMLElement | undefined = CAN_USE_DOM ? document.body : undefined,
+  parent?: HTMLElement,
   shouldIncludePageYOffset__EXPERIMENTAL: boolean = true,
 ): Ref<HTMLElement | null> {
   const editor = useLexicalComposer()
-  const initialAnchorElement = CAN_USE_DOM ? document.createElement('div') : null
+  const initialAnchorElement = CAN_USE_DOM
+    ? getRootOwnerDocument(editor.getRootElement()).createElement('div')
+    : null
   const anchorElementRef = ref<HTMLElement | null>(initialAnchorElement)
   const positionMenu = () => {
-    if (anchorElementRef.value === null || parent === undefined) {
+    const resolvedParent = parent ?? resolveMenuParent(editor)
+    if (anchorElementRef.value === null || resolvedParent === undefined) {
       return
     }
 
@@ -226,18 +218,18 @@ export function useMenuAnchorRef(
 
       if (!containerDiv.isConnected) {
         setContainerDivAttributes(containerDiv, className)
-        parent.append(containerDiv)
+        resolvedParent.append(containerDiv)
       }
       containerDiv.setAttribute('id', 'typeahead-menu')
       rootElement.setAttribute('aria-controls', 'typeahead-menu')
     }
   }
 
-  watchEffect(() => {
+  watchEffect((onInvalidate) => {
     const rootElement = editor.getRootElement()
     if (resolution.value !== null) {
       positionMenu()
-      return () => {
+      onInvalidate(() => {
         if (rootElement !== null)
           rootElement.removeAttribute('aria-controls')
 
@@ -246,7 +238,7 @@ export function useMenuAnchorRef(
           containerDiv.remove()
           containerDiv.removeAttribute('id')
         }
-      }
+      })
     }
   })
 
@@ -280,11 +272,33 @@ interface LexicalMenuProps<TOption extends MenuOption> {
   options: Array<TOption>
   shouldSplitNodeWithQuery?: boolean
   commandPriority?: CommandListenerPriority
+  preselectFirstItem?: boolean
 }
 
 export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<TOption>) {
-  const selectedIndex = ref<number | null>(null)
+  const instance = getCurrentInstance()
+  const rawSelectedIndex = ref<number | null>(null)
+  const selectedIndex = computed(() => rawSelectedIndex.value === null
+    ? null
+    : Math.min(props.options.length - 1, rawSelectedIndex.value))
   const matchString = computed(() => props.resolution.match && props.resolution.match.matchingString)
+  const commandPriority = computed(() => props.commandPriority ?? COMMAND_PRIORITY_LOW)
+
+  function hasPreselectFirstItemProp() {
+    const vnodeProps = instance?.vnode.props
+    return vnodeProps != null
+      && ('preselectFirstItem' in vnodeProps || 'preselect-first-item' in vnodeProps)
+  }
+
+  const hasPreselectFirstItem = ref(hasPreselectFirstItemProp())
+
+  onUpdated(() => {
+    hasPreselectFirstItem.value = hasPreselectFirstItemProp()
+  })
+
+  const shouldPreselectFirstItem = computed(() =>
+    hasPreselectFirstItem.value ? props.preselectFirstItem : true,
+  )
 
   const emit = vineEmits<{
     selectOption: [payload: {
@@ -296,7 +310,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   }>()
 
   function setHighlightedIndex(index: number | null) {
-    selectedIndex.value = index
+    rawSelectedIndex.value = index
   }
 
   /**
@@ -310,7 +324,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   ): number {
     let triggerOffset = offset
     for (let i = triggerOffset; i <= entryText.length; i++) {
-      if (documentText.substring(-i) === entryText.substring(0, i))
+      if (documentText.slice(-i) === entryText.substring(0, i))
         triggerOffset = i
     }
     return triggerOffset
@@ -355,7 +369,8 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   }
 
   watch(matchString, () => {
-    setHighlightedIndex(0)
+    if (shouldPreselectFirstItem.value)
+      setHighlightedIndex(0)
   }, { immediate: true })
 
   function selectOptionAndCleanUp(selectedEntry: TOption) {
@@ -394,12 +409,12 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   watchEffect(() => {
     if (props.options === null)
       setHighlightedIndex(null)
-    else if (selectedIndex.value === null)
+    else if (selectedIndex.value === null && shouldPreselectFirstItem.value)
       updateSelectedIndex(0)
   })
 
   function scrollIntoViewIfNeeded(target: HTMLElement) {
-    const typeaheadContainerNode = document.getElementById('typeahead-menu')
+    const typeaheadContainerNode = target.closest('#typeahead-menu') as HTMLElement | null
     if (!typeaheadContainerNode)
       return
 
@@ -421,9 +436,6 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   }
 
   watchEffect((onInvalidate) => {
-    if (!props.commandPriority)
-      return
-
     const fn = mergeRegister(
       props.editor.registerCommand(
         SCROLL_TYPEAHEAD_OPTION_INTO_VIEW_COMMAND,
@@ -435,7 +447,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
 
           return false
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
     )
 
@@ -443,19 +455,26 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
   })
 
   watchEffect((onInvalidate) => {
-    if (!props.commandPriority)
-      return
-
     const fn = mergeRegister(
       props.editor.registerCommand<KeyboardEvent>(
         KEY_ARROW_DOWN_COMMAND,
         (payload) => {
           const event = payload
-          if (props.options !== null && props.options.length && selectedIndex.value !== null) {
+          if (props.options !== null && props.options.length) {
             const newSelectedIndex
-              = selectedIndex.value !== props.options.length - 1 ? selectedIndex.value + 1 : 0
+              = selectedIndex.value === null
+                ? 0
+                : selectedIndex.value !== props.options.length - 1
+                  ? selectedIndex.value + 1
+                  : 0
             updateSelectedIndex(newSelectedIndex)
             const option = props.options[newSelectedIndex]
+            if (!option) {
+              updateSelectedIndex(-1)
+              event.preventDefault()
+              event.stopImmediatePropagation()
+              return true
+            }
             if (option.ref != null && option.ref) {
               props.editor.dispatchCommand(
                 SCROLL_TYPEAHEAD_OPTION_INTO_VIEW_COMMAND,
@@ -470,17 +489,27 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
           }
           return true
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
       props.editor.registerCommand<KeyboardEvent>(
         KEY_ARROW_UP_COMMAND,
         (payload) => {
           const event = payload
-          if (props.options !== null && props.options.length && selectedIndex.value !== null) {
+          if (props.options !== null && props.options.length) {
             const newSelectedIndex
-              = selectedIndex.value !== 0 ? selectedIndex.value! - 1 : props.options.length - 1
+              = selectedIndex.value === null
+                ? props.options.length - 1
+                : selectedIndex.value !== 0
+                  ? selectedIndex.value - 1
+                  : props.options.length - 1
             updateSelectedIndex(newSelectedIndex)
             const option = props.options[newSelectedIndex]
+            if (!option) {
+              updateSelectedIndex(-1)
+              event.preventDefault()
+              event.stopImmediatePropagation()
+              return true
+            }
             if (option.ref != null && option.ref)
               scrollIntoViewIfNeeded(option.ref)
 
@@ -489,7 +518,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
           }
           return true
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
       props.editor.registerCommand<KeyboardEvent>(
         KEY_ESCAPE_COMMAND,
@@ -497,10 +526,10 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
           const event = payload
           event.preventDefault()
           event.stopImmediatePropagation()
-          close()
+          props.close()
           return true
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
       props.editor.registerCommand<KeyboardEvent>(
         KEY_TAB_COMMAND,
@@ -519,7 +548,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
           selectOptionAndCleanUp(props.options[selectedIndex.value])
           return true
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
       props.editor.registerCommand(
         KEY_ENTER_COMMAND,
@@ -528,6 +557,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
             props.options === null
             || selectedIndex.value === null
             || props.options[selectedIndex.value] == null
+            || (event && event.shiftKey)
           ) {
             return false
           }
@@ -539,7 +569,7 @@ export function LexicalMenu<TOption extends MenuOption>(props: LexicalMenuProps<
           selectOptionAndCleanUp(props.options[selectedIndex.value])
           return true
         },
-        props.commandPriority,
+        commandPriority.value,
       ),
     )
 

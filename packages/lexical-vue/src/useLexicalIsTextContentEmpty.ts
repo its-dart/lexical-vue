@@ -5,9 +5,10 @@ import { readonly, shallowRef, toValue, watchEffect } from 'vue'
 
 export function useLexicalIsTextContentEmpty(editor: LexicalEditor, trim?: MaybeRefOrGetter<boolean>) {
   const isEmpty = shallowRef(
-    editor
-      .getEditorState()
-      .read($isRootTextContentEmptyCurry(editor.isComposing(), toValue(trim))),
+    editor.read(
+      'latest',
+      $isRootTextContentEmptyCurry(editor.isComposing(), toValue(trim)),
+    ),
   )
 
   watchEffect((onInvalidate) => {

@@ -52,20 +52,20 @@ onMounted(() => {
 
 <template>
   <Teleport to="body">
-    <div className="Modal__overlay" role="dialog">
-      <div ref="modalRef" className="Modal__modal" tabIndex="{-1}">
-        <h2 className="Modal__title">
+    <div class="Modal__overlay" role="dialog">
+      <div ref="modalRef" class="Modal__modal" tabindex="-1">
+        <h2 class="Modal__title">
           {{ title }}
         </h2>
         <button
-          className="Modal__closeButton"
+          class="Modal__closeButton"
           aria-label="Close modal"
           type="button"
           @click="$emit('close')"
         >
           X
         </button>
-        <div className="Modal__content">
+        <div class="Modal__content">
           <slot />
         </div>
       </div>

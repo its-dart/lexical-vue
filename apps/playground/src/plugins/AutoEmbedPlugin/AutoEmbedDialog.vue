@@ -64,7 +64,7 @@ function onChange(e: Event) {
         :placeholder="embedConfig.exampleUrl"
         :value="text"
         :data-test-id="`${embedConfig.type}-embed-modal-url`"
-        @change="onChange"
+        @input="onChange"
       >
     </div>
     <DialogActions>

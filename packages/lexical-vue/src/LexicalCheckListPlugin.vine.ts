@@ -1,14 +1,18 @@
 import { registerCheckList } from '@lexical/list'
-import { onMounted, onUnmounted } from 'vue'
+import { watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 
-export function CheckListPlugin() {
+export function CheckListPlugin(props: {
+  disableTakeFocusOnClick?: boolean
+}) {
   const editor = useLexicalComposer()
 
-  onMounted(() => {
-    const unregister = registerCheckList(editor)
+  watchEffect((onInvalidate) => {
+    const unregister = registerCheckList(editor, {
+      disableTakeFocusOnClick: props.disableTakeFocusOnClick ?? false,
+    })
 
-    onUnmounted(unregister)
+    onInvalidate(unregister)
   })
 
   return vine``

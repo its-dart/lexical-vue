@@ -16,7 +16,8 @@ export type ContentEditableElementProps = {
   ariaMultiline?: AriaAttributes['aria-multiline']
   ariaOwns?: AriaAttributes['aria-owns']
   ariaRequired?: AriaAttributes['aria-required']
-} & Omit<HTMLAttributes, 'placeholder'>
+  style?: any
+} & Omit<HTMLAttributes, 'placeholder' | 'prefix' | 'style'>
 
 export function ContentEditableElement(props: ContentEditableElementProps) {
   const root = useTemplateRef('root')
@@ -24,7 +25,9 @@ export function ContentEditableElement(props: ContentEditableElementProps) {
 
   const otherAttrs = computed(() => {
     const { editor: _, ...rest } = props
-    return rest
+    return Object.fromEntries(
+      Object.entries(rest).filter(([, value]) => value !== undefined),
+    )
   })
 
   onMounted(() => {
@@ -50,7 +53,10 @@ export function ContentEditableElement(props: ContentEditableElementProps) {
       isEditable.value = currentIsEditable
     })
 
-    onUnmounted(unregister)
+    onUnmounted(() => {
+      unregister()
+      props.editor.setRootElement(null)
+    })
   })
 
   const roleWithDefault = computed(() => props.role ?? 'textbox')
@@ -63,7 +69,9 @@ export function ContentEditableElement(props: ContentEditableElementProps) {
         :aria-autocomplete="isEditable ? ariaAutoComplete : 'none'"
         :aria-controls="isEditable ? ariaControls : undefined"
         :aria-describedby="ariaDescribedBy"
+        :aria-errormessage="ariaErrorMessage"
         :aria-expanded="isEditable && roleWithDefault === 'combobox' ? !!ariaExpanded : undefined"
+        :aria-invalid="ariaInvalid"
         :aria-label="ariaLabel"
         :aria-labelledby="ariaLabelledBy"
         :aria-multiline="ariaMultiline"
@@ -73,8 +81,8 @@ export function ContentEditableElement(props: ContentEditableElementProps) {
         :autocapitalize
         :contenteditable="isEditable"
         :role="isEditable ? roleWithDefault : undefined"
-        :spellcheck="spellcheck || true"
-        :tabindex="tabindex"
+        :spellcheck="spellcheck ?? true"
+        :tabindex="tabindex ?? (isEditable ? undefined : -1)"
     />
   `
 }

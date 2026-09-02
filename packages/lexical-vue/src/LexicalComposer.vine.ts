@@ -1,7 +1,7 @@
 import type { EditorState, EditorThemeClasses, HTMLConfig, Klass, LexicalEditor, LexicalNode, LexicalNodeReplacement } from 'lexical'
 import type { InjectionKey } from 'vue'
 import { CAN_USE_DOM } from '@lexical/utils'
-import { $createParagraphNode, $getRoot, $getSelection, createEditor, HISTORY_MERGE_TAG } from 'lexical'
+import { $createParagraphNode, $getRoot, $getSelection, createEditor, getActiveElement, HISTORY_MERGE_TAG } from 'lexical'
 import invariant from 'tiny-invariant'
 import { inject, onMounted, provide } from 'vue'
 
@@ -17,6 +17,7 @@ export type InitialConfigType = Readonly<{
   namespace: string
   nodes?: ReadonlyArray<Klass<LexicalNode> | LexicalNodeReplacement>
   onError: (error: Error, editor: LexicalEditor) => void
+  onWarn?: (error: Error, editor: LexicalEditor) => void
   editable?: boolean
   theme?: EditorThemeClasses
   editorState?: InitialEditorStateType
@@ -33,6 +34,7 @@ export function LexicalComposer(props: {
     namespace,
     nodes,
     onError,
+    onWarn,
     editorState: initialEditorState,
     html,
   } = props.initialConfig
@@ -51,6 +53,13 @@ export function LexicalComposer(props: {
       emit('error', error, editor)
       onError?.(error, editor)
     },
+    ...(onWarn
+      ? {
+          onWarn(error: Error) {
+            onWarn(error, editor)
+          },
+        }
+      : {}),
   })
 
   initializeEditor(editor, initialEditorState)
@@ -68,10 +77,14 @@ export function LexicalComposer(props: {
         if (root.isEmpty()) {
           const paragraph = $createParagraphNode()
           root.append(paragraph)
-          const activeElement = CAN_USE_DOM ? document.activeElement : null
+          const rootElement = editor.getRootElement()
+          const activeElement
+            = CAN_USE_DOM && rootElement !== null
+              ? getActiveElement(rootElement)
+              : null
           if (
             $getSelection() !== null
-            || (activeElement !== null && activeElement === editor.getRootElement())
+            || (activeElement !== null && activeElement === rootElement)
           ) {
             paragraph.select()
           }

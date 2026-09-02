@@ -9,6 +9,7 @@ import {
   CONNECTED_COMMAND,
   createUndoManager,
   initLocalState,
+  removeCursorHighlightRule,
   setLocalStateFocus,
   syncCursorPositions,
   syncLexicalUpdateToYjs,
@@ -24,8 +25,10 @@ import {
   CAN_UNDO_COMMAND,
   COMMAND_PRIORITY_EDITOR,
   FOCUS_COMMAND,
+  getActiveElement,
   HISTORY_MERGE_TAG,
   REDO_COMMAND,
+  registerEventListeners,
   SKIP_COLLAB_TAG,
   UNDO_COMMAND,
 } from 'lexical'
@@ -37,6 +40,8 @@ type OnYjsTreeChanges = (
   events: Array<YEvent<any>>,
   transaction: Transaction,
 ) => void
+
+const COLLAB_UNDO_MANAGER = Symbol.for('@lexical/yjs/UndoManager')
 
 export function useYjsCollaboration(
   editor: LexicalEditor,
@@ -50,31 +55,42 @@ export function useYjsCollaboration(
   doc: Ref<Doc | null>,
   cursorsContainerRef?: MaybeRefOrGetter<HTMLElement | null>,
   initialEditorState?: MaybeRefOrGetter<InitialEditorStateType>,
-  awarenessData?: MaybeRefOrGetter<object>,
-  syncCursorPositionsFn: SyncCursorPositionsFn = syncCursorPositions,
+  awarenessData?: MaybeRefOrGetter<object | undefined>,
+  syncCursorPositionsFn?: MaybeRefOrGetter<SyncCursorPositionsFn | undefined>,
+  selectionHighlight?: MaybeRefOrGetter<boolean | undefined>,
 ) {
   const isReloadingDoc = ref(false)
 
   const onBootstrap = () => {
-    const { root } = toValue(binding)
-    if (shouldBootstrap && root.isEmpty() && root._xmlText._length === 0) {
+    const resolvedBinding = toValue(binding)
+    if (!resolvedBinding) {
+      return
+    }
+    const { root } = resolvedBinding
+    if (toValue(shouldBootstrap) && root.isEmpty() && root._xmlText._length === 0) {
       initializeEditor(editor, toValue(initialEditorState))
     }
   }
 
   watchEffect((onInvalidate) => {
-    const { root } = toValue(binding)
+    const resolvedBinding = toValue(binding)
+    const resolvedProvider = provider.value
+    if (!resolvedBinding || !resolvedProvider) {
+      return
+    }
+
+    const { root } = resolvedBinding
 
     const onYjsTreeChanges: OnYjsTreeChanges = (events, transaction) => {
       const origin = transaction.origin
-      if (origin !== binding) {
+      if (origin !== resolvedBinding) {
         const isFromUndoManger = origin instanceof UndoManager
         syncYjsChangesToLexical(
-          toValue(binding),
-          provider.value,
+          resolvedBinding,
+          resolvedProvider,
           events,
           isFromUndoManger,
-          syncCursorPositionsFn,
+          toValue(syncCursorPositionsFn) ?? syncCursorPositions,
         )
       }
     }
@@ -91,8 +107,8 @@ export function useYjsCollaboration(
       }) => {
         if (!tags.has(SKIP_COLLAB_TAG)) {
           syncLexicalUpdateToYjs(
-            toValue(binding),
-            provider.value,
+            resolvedBinding,
+            resolvedProvider,
             prevEditorState,
             editorState,
             dirtyElements,
@@ -112,8 +128,14 @@ export function useYjsCollaboration(
 
   // Note: 'reload' is not an actual Yjs event type. Included here for legacy support (#1409).
   watchEffect((onInvalidate) => {
+    const resolvedBinding = toValue(binding)
+    const resolvedProvider = provider.value
+    if (!resolvedProvider || !resolvedBinding) {
+      return
+    }
+
     const onProviderDocReload = (ydoc: Doc) => {
-      clearEditorSkipCollab(editor, toValue(binding))
+      clearEditorSkipCollab(editor, resolvedBinding)
       doc.value = ydoc
       toValue(docMap).set(toValue(id), ydoc)
       isReloadingDoc.value = true
@@ -123,12 +145,12 @@ export function useYjsCollaboration(
       isReloadingDoc.value = false
     }
 
-    provider.value.on('reload', onProviderDocReload)
-    provider.value.on('sync', onSync)
+    resolvedProvider.on('reload', onProviderDocReload)
+    resolvedProvider.on('sync', onSync)
 
     onInvalidate(() => {
-      provider.value.off('reload', onProviderDocReload)
-      provider.value.off('sync', onSync)
+      resolvedProvider.off('reload', onProviderDocReload)
+      resolvedProvider.off('sync', onSync)
     })
   })
 
@@ -142,7 +164,34 @@ export function useYjsCollaboration(
     onBootstrap,
   )
 
+  useAwareness(binding, provider, selectionHighlight)
+
   return useYjsCursors(binding, cursorsContainerRef)
+}
+
+function useAwareness(
+  binding: MaybeRefOrGetter<Binding>,
+  provider: Ref<Provider>,
+  selectionHighlight?: MaybeRefOrGetter<boolean | undefined>,
+) {
+  watchEffect((onInvalidate) => {
+    const resolvedBinding = toValue(binding)
+    const resolvedProvider = provider.value
+    if (!resolvedBinding || !resolvedProvider) {
+      return
+    }
+
+    const onAwarenessUpdate = () => {
+      syncCursorPositions(resolvedBinding, resolvedProvider, {
+        selectionHighlight: toValue(selectionHighlight) ?? false,
+      })
+    }
+
+    resolvedProvider.awareness.on('update', onAwarenessUpdate)
+    onInvalidate(() => {
+      resolvedProvider.awareness.off('update', onAwarenessUpdate)
+    })
+  })
 }
 
 export function useProvider(
@@ -151,14 +200,12 @@ export function useProvider(
   name: MaybeRefOrGetter<string>,
   color: MaybeRefOrGetter<string>,
   isReloadingDoc: Ref<boolean>,
-  awarenessData?: object,
+  awarenessData?: MaybeRefOrGetter<object | undefined>,
   onBootstrap?: () => void,
 ): void {
-  const connect = () => provider.value.connect()
-
-  const disconnect = () => {
+  const disconnect = (resolvedProvider: Provider) => {
     try {
-      provider.value.disconnect()
+      resolvedProvider.disconnect()
     }
     catch {
       // Do nothing
@@ -166,6 +213,11 @@ export function useProvider(
   }
 
   watchEffect((onInvalidate) => {
+    const resolvedProvider = provider.value
+    if (!resolvedProvider) {
+      return
+    }
+
     const onStatus = ({ status }: { status: string }) => {
       editor.dispatchCommand(CONNECTED_COMMAND, status === 'connected')
     }
@@ -176,23 +228,24 @@ export function useProvider(
       }
     }
 
+    const rootElement = editor.getRootElement()
     initLocalState(
-      provider.value,
+      resolvedProvider,
       toValue(name),
       toValue(color),
-      document.activeElement === editor.getRootElement(),
-      awarenessData || {},
+      rootElement !== null && getActiveElement(rootElement) === rootElement,
+      toValue(awarenessData) || {},
     )
 
-    provider.value.on('status', onStatus)
-    provider.value.on('sync', onSync)
+    resolvedProvider.on('status', onStatus)
+    resolvedProvider.on('sync', onSync)
 
-    const connectionPromise = connect()
+    const connectionPromise = resolvedProvider.connect()
 
     onInvalidate(() => {
       if (isReloadingDoc.value === false) {
         if (connectionPromise) {
-          connectionPromise.then(disconnect)
+          connectionPromise.then(() => disconnect(resolvedProvider))
         }
         else {
           // Workaround for race condition in StrictMode. It's possible there
@@ -202,16 +255,21 @@ export function useProvider(
           // TOGGLE_CONNECT_COMMAND below when the provider connect returns a
           // promise.
           // https://github.com/facebook/lexical/issues/6640
-          disconnect()
+          disconnect(resolvedProvider)
         }
       }
 
-      provider.value.off('sync', onSync)
-      provider.value.off('status', onStatus)
+      resolvedProvider.off('sync', onSync)
+      resolvedProvider.off('status', onStatus)
     })
   })
 
   watchEffect((onInvalidate) => {
+    const resolvedProvider = provider.value
+    if (!resolvedProvider) {
+      return
+    }
+
     const unregister = editor.registerCommand(
       TOGGLE_CONNECT_COMMAND,
       (payload) => {
@@ -220,12 +278,12 @@ export function useProvider(
         if (shouldConnect) {
           // eslint-disable-next-line no-console
           console.log('Collaboration connected!')
-          connect()
+          resolvedProvider.connect()
         }
         else {
           // eslint-disable-next-line no-console
           console.log('Collaboration disconnected!')
-          disconnect()
+          disconnect(resolvedProvider)
         }
 
         return true
@@ -235,6 +293,27 @@ export function useProvider(
 
     onInvalidate(unregister)
   })
+
+  watchEffect((onInvalidate) => {
+    const resolvedProvider = provider.value
+    if (!resolvedProvider) {
+      return
+    }
+
+    const clearAwarenessState = () => {
+      try {
+        resolvedProvider.awareness.setLocalState(null)
+      }
+      catch {
+        // Ignore errors during cleanup if the provider is already disconnected.
+      }
+    }
+
+    onInvalidate(registerEventListeners(window, {
+      beforeunload: clearAwarenessState,
+      pagehide: clearAwarenessState,
+    }))
+  })
 }
 
 export function useYjsCursors(
@@ -242,6 +321,11 @@ export function useYjsCursors(
   cursorsContainerRef?: MaybeRefOrGetter<HTMLElement | null>,
 ) {
   return computed(() => {
+    const resolvedBinding = toValue(binding)
+    if (!resolvedBinding) {
+      return null
+    }
+
     const target = toValue(cursorsContainerRef) || document.body
 
     return h(
@@ -249,7 +333,7 @@ export function useYjsCursors(
       { to: target },
       h('div', {
         ref: (element) => {
-          toValue(binding).cursorsContainer = element as null | HTMLElement
+          resolvedBinding.cursorsContainer = element as null | HTMLElement
         },
       }),
     )
@@ -261,14 +345,19 @@ export function useYjsFocusTracking(
   provider: Ref<Provider>,
   name: MaybeRefOrGetter<string>,
   color: MaybeRefOrGetter<string>,
-  awarenessData?: object,
+  awarenessData?: MaybeRefOrGetter<object | undefined>,
 ) {
   watchEffect((onInvalidate) => {
+    const resolvedProvider = provider.value
+    if (!resolvedProvider) {
+      return
+    }
+
     const unregister = mergeRegister(
       editor.registerCommand(
         FOCUS_COMMAND,
         () => {
-          setLocalStateFocus(provider.value, toValue(name), toValue(color), true, awarenessData || {})
+          setLocalStateFocus(resolvedProvider, toValue(name), toValue(color), true, toValue(awarenessData) || {})
           return false
         },
         COMMAND_PRIORITY_EDITOR,
@@ -276,7 +365,7 @@ export function useYjsFocusTracking(
       editor.registerCommand(
         BLUR_COMMAND,
         () => {
-          setLocalStateFocus(provider.value, toValue(name), toValue(color), false, awarenessData || {})
+          setLocalStateFocus(resolvedProvider, toValue(name), toValue(color), false, toValue(awarenessData) || {})
           return false
         },
         COMMAND_PRIORITY_EDITOR,
@@ -288,19 +377,29 @@ export function useYjsFocusTracking(
 }
 
 export function useYjsHistory(editor: LexicalEditor, binding: MaybeRefOrGetter<Binding>): () => void {
-  const undoManager = computed(() => createUndoManager(toValue(binding), toValue(binding).root.getSharedType()))
+  const undoManager = computed(() => {
+    const resolvedBinding = toValue(binding)
+    return resolvedBinding
+      ? createUndoManager(resolvedBinding, resolvedBinding.root.getSharedType())
+      : null
+  })
 
   return useYjsUndoManager(editor, undoManager)
 }
 
-export function useYjsUndoManager(editor: LexicalEditor, undoManager: Ref<UndoManager>) {
+export function useYjsUndoManager(editor: LexicalEditor, undoManager: Ref<UndoManager | null>) {
   watchEffect((onInvalidate) => {
+    const resolvedUndoManager = undoManager.value
+    if (!resolvedUndoManager) {
+      return
+    }
+
     const undo = () => {
-      undoManager.value.undo()
+      resolvedUndoManager.undo()
     }
 
     const redo = () => {
-      undoManager.value.redo()
+      resolvedUndoManager.redo()
     }
 
     const unregister = mergeRegister(
@@ -325,29 +424,48 @@ export function useYjsUndoManager(editor: LexicalEditor, undoManager: Ref<UndoMa
     onInvalidate(unregister)
   })
 
+  watchEffect((onInvalidate) => {
+    const resolvedUndoManager = undoManager.value
+    if (!resolvedUndoManager) {
+      return
+    }
+    const editorWithManager = editor as LexicalEditor & Record<symbol, UndoManager | undefined>
+    editorWithManager[COLLAB_UNDO_MANAGER] = resolvedUndoManager
+    onInvalidate(() => {
+      if (editorWithManager[COLLAB_UNDO_MANAGER] === resolvedUndoManager) {
+        delete editorWithManager[COLLAB_UNDO_MANAGER]
+      }
+    })
+  })
+
   const clearHistory = () => {
-    undoManager.value.clear()
+    undoManager.value?.clear()
   }
 
   // Exposing undo and redo states
   watchEffect((onInvalidate) => {
+    const resolvedUndoManager = undoManager.value
+    if (!resolvedUndoManager) {
+      return
+    }
+
     const updateUndoRedoStates = () => {
       editor.dispatchCommand(
         CAN_UNDO_COMMAND,
-        undoManager.value.undoStack.length > 0,
+        resolvedUndoManager.undoStack.length > 0,
       )
       editor.dispatchCommand(
         CAN_REDO_COMMAND,
-        undoManager.value.redoStack.length > 0,
+        resolvedUndoManager.redoStack.length > 0,
       )
     }
-    undoManager.value.on('stack-item-added', updateUndoRedoStates)
-    undoManager.value.on('stack-item-popped', updateUndoRedoStates)
-    undoManager.value.on('stack-cleared', updateUndoRedoStates)
+    resolvedUndoManager.on('stack-item-added', updateUndoRedoStates)
+    resolvedUndoManager.on('stack-item-popped', updateUndoRedoStates)
+    resolvedUndoManager.on('stack-cleared', updateUndoRedoStates)
     onInvalidate(() => {
-      undoManager.value.off('stack-item-added', updateUndoRedoStates)
-      undoManager.value.off('stack-item-popped', updateUndoRedoStates)
-      undoManager.value.off('stack-cleared', updateUndoRedoStates)
+      resolvedUndoManager.off('stack-item-added', updateUndoRedoStates)
+      resolvedUndoManager.off('stack-item-popped', updateUndoRedoStates)
+      resolvedUndoManager.off('stack-cleared', updateUndoRedoStates)
     })
   })
 
@@ -390,11 +508,11 @@ function initializeEditor(
         else {
           const paragraph = $createParagraphNode()
           root.append(paragraph)
-          const { activeElement } = document
+          const rootElement = editor.getRootElement()
 
           if (
             $getSelection() !== null
-            || (activeElement !== null && activeElement === editor.getRootElement())
+            || (rootElement !== null && getActiveElement(rootElement) === rootElement)
           ) {
             paragraph.select()
           }
@@ -407,7 +525,7 @@ function initializeEditor(
   )
 }
 
-function clearEditorSkipCollab(editor: LexicalEditor, binding: Binding) {
+function clearEditorSkipCollab(editor: LexicalEditor, binding: BaseBinding) {
   // reset editor state
   editor.update(
     () => {
@@ -433,17 +551,23 @@ function clearEditorSkipCollab(editor: LexicalEditor, binding: Binding) {
   if (cursorsContainer == null)
     return
 
-  // reset cursors in dom
-  const cursorsArr = Array.from(cursors.values())
-
-  for (let i = 0; i < cursorsArr.length; i++) {
-    const cursor = cursorsArr[i]
+  for (const cursor of cursors.values()) {
     const selection = cursor.selection
-
-    if (selection && selection.selections !== null) {
-      const selections = selection.selections
-
-      for (let j = 0; j < selections.length; j++) cursorsContainer.removeChild(selections[i])
+    if (selection === null) {
+      continue
     }
+    if (selection.highlight !== null) {
+      (CSS.highlights as unknown as { delete: (name: string) => boolean }).delete(selection.highlightName)
+      removeCursorHighlightRule(binding, selection.highlightName)
+    }
+    if (selection.caret.parentNode === cursorsContainer) {
+      cursorsContainer.removeChild(selection.caret)
+    }
+    for (const span of selection.selections) {
+      if (span.parentNode === cursorsContainer) {
+        cursorsContainer.removeChild(span)
+      }
+    }
+    cursor.selection = null
   }
 }

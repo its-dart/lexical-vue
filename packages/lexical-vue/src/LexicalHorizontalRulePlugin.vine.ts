@@ -1,4 +1,3 @@
-import { $createHorizontalRuleNode, INSERT_HORIZONTAL_RULE_COMMAND } from '@lexical/extension'
 import { $insertNodeToNearestRoot } from '@lexical/utils'
 import {
   $getSelection,
@@ -7,6 +6,7 @@ import {
 } from 'lexical'
 import { onMounted, onUnmounted } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
+import { $createHorizontalRuleNode, INSERT_HORIZONTAL_RULE_COMMAND } from './LexicalHorizontalRuleNode'
 
 export function HorizontalRulePlugin() {
   const editor = useLexicalComposer()

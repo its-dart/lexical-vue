@@ -66,7 +66,7 @@ function onError(error: Error) {
 <template>
   <LexicalComposer :initial-config="config" @error="onError">
     <div ref="cursorsContainerRef" class="editor-container">
-      <div className="editor-inner">
+      <div class="editor-inner">
         <LexicalRichTextPlugin>
           <template #contentEditable>
             <LexicalContentEditable class="editor-input" />

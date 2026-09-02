@@ -1,16 +1,34 @@
 import { selectionAlwaysOnDisplay } from '@lexical/utils'
-import { onMounted, onUnmounted } from 'vue'
+import { getCurrentInstance, onUpdated, ref, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 
 export function SelectionAlwaysOnDisplay() {
+  const instance = getCurrentInstance()
   const editor = useLexicalComposer()
+  const emit = vineEmits<{
+    reposition?: [nodes: readonly HTMLElement[]]
+  }>()
 
-  onMounted(() => {
-    const unregister = selectionAlwaysOnDisplay(editor)
+  function hasRepositionListenerProp() {
+    const vnodeProps = instance?.vnode.props
+    return vnodeProps != null
+      && ('onReposition' in vnodeProps || 'onRepositionOnce' in vnodeProps)
+  }
 
-    onUnmounted(() => {
-      unregister()
-    })
+  const hasRepositionListener = ref(hasRepositionListenerProp())
+
+  onUpdated(() => {
+    hasRepositionListener.value = hasRepositionListenerProp()
+  })
+
+  watchEffect((onInvalidate) => {
+    const unregister = selectionAlwaysOnDisplay(
+      editor,
+      hasRepositionListener.value
+        ? nodes => emit('reposition', nodes)
+        : undefined,
+    )
+    onInvalidate(unregister)
   })
   return vine``
 }

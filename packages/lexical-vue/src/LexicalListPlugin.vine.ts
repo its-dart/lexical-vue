@@ -9,6 +9,11 @@ export interface ListPluginProps {
    * When `false` (default), indentation is more flexible.
    */
   hasStrictIndent?: boolean
+  /**
+   * When `true`, splitting a numbered list will preserve the numbering continuity.
+   * When `false` (default), the new split list resets to 1.
+   */
+  shouldPreserveNumbering?: boolean
 }
 
 export function ListPlugin(props: ListPluginProps) {
@@ -29,7 +34,7 @@ export function ListPlugin(props: ListPluginProps) {
     onInvalidate(unregister)
   })
 
-  useList(editor)
+  useList(editor, () => props.shouldPreserveNumbering)
 
   return vine``
 }

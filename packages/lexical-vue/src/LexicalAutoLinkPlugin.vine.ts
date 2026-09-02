@@ -1,5 +1,5 @@
 import type { ChangeHandler, LinkMatcher } from '@lexical/link'
-import type { LexicalEditor } from 'lexical'
+import type { ElementNode, LexicalEditor } from 'lexical'
 import type { MaybeRefOrGetter } from 'vue'
 import {
   AutoLinkNode,
@@ -21,6 +21,7 @@ function useAutoLink(
   editor: LexicalEditor,
   matchers: MaybeRefOrGetter<Array<LinkMatcher>>,
   onChange?: ChangeHandler,
+  excludeParents?: MaybeRefOrGetter<Array<(parent: ElementNode) => boolean> | undefined>,
 ) {
   watchEffect((onInvalidate) => {
     if (!editor.hasNodes([AutoLinkNode]))
@@ -28,6 +29,7 @@ function useAutoLink(
 
     const unregister = registerAutoLink(editor, {
       changeHandlers: onChange ? [onChange] : [],
+      excludeParents: toValue(excludeParents) ?? [],
       matchers: toValue(matchers),
     })
 
@@ -35,19 +37,27 @@ function useAutoLink(
   })
 }
 
-export function AutoLinkPlugin(props: { matchers: LinkMatcher[] }) {
+export function AutoLinkPlugin(props: {
+  matchers: LinkMatcher[]
+  excludeParents?: Array<(parent: ElementNode) => boolean>
+}) {
   const emit = vineEmits<{
     change?: [value: { url: string | null, prevUrl: string | null }]
   }>()
 
   const editor = useLexicalComposer()
 
-  useAutoLink(editor, () => props.matchers, (url: string | null, prevUrl: string | null) => {
-    emit('change', {
-      url,
-      prevUrl,
-    })
-  })
+  useAutoLink(
+    editor,
+    () => props.matchers,
+    (url: string | null, prevUrl: string | null) => {
+      emit('change', {
+        url,
+        prevUrl,
+      })
+    },
+    () => props.excludeParents,
+  )
 
   return vine``
 }

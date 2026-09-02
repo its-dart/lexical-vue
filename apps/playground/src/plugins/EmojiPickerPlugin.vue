@@ -129,12 +129,13 @@ function onSelectOption({
             :ref="option.setRefElement"
             tabindex="-1"
             role="option"
+            :aria-selected="selectedIndex === index"
             class="item"
             :class="{ selected: selectedIndex === index }"
             @mouseenter="setHighlightedIndex(index)"
             @click="setHighlightedIndex(index); selectOptionAndCleanUp(option)"
           >
-            <span className="text">
+            <span class="text">
               {{ option.emoji }} {{ option.title }}
             </span>
           </li>

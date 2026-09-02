@@ -1,33 +1,33 @@
+import type { SerializedHorizontalRuleNode } from '@lexical/extension'
 import type {
-  DOMConversionMap,
   DOMConversionOutput,
-  LexicalCommand,
-  LexicalNode,
   NodeKey,
-  SerializedLexicalNode,
 } from 'lexical'
 
 import type { Component, PropType } from 'vue'
 import {
-  addClassNamesToElement,
-  mergeRegister,
-  removeClassNamesFromElement,
-} from '@lexical/utils'
+  $isHorizontalRuleNode,
+  HorizontalRuleNode as BaseHorizontalRuleNode,
+  INSERT_HORIZONTAL_RULE_COMMAND,
+} from '@lexical/extension'
 import {
   $applyNodeReplacement,
+  addClassNamesToElement,
   CLICK_COMMAND,
   COMMAND_PRIORITY_LOW,
-  createCommand,
-  DecoratorNode,
+  getComposedEventTarget,
+  mergeRegister,
+  removeClassNamesFromElement,
 } from 'lexical'
 import { defineComponent, h, watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
 import { useLexicalNodeSelection } from './useLexicalNodeSelection'
 
-export type SerializedHorizontalRuleNode = SerializedLexicalNode
-
-export const INSERT_HORIZONTAL_RULE_COMMAND: LexicalCommand<void>
-  = createCommand('INSERT_HORIZONTAL_RULE_COMMAND')
+export {
+  $isHorizontalRuleNode,
+  INSERT_HORIZONTAL_RULE_COMMAND,
+  type SerializedHorizontalRuleNode,
+}
 
 const HorizontalRuleComponent = defineComponent({
   props: {
@@ -48,7 +48,7 @@ const HorizontalRuleComponent = defineComponent({
           (event: MouseEvent) => {
             const hrElem = editor.getElementByKey(props.nodeKey)
 
-            if (event.target === hrElem) {
+            if (getComposedEventTarget(event) === hrElem) {
               if (!event.shiftKey) {
                 clearSelection()
               }
@@ -78,31 +78,21 @@ const HorizontalRuleComponent = defineComponent({
         }
       }
     })
+
+    return () => null
   },
 })
 
-export class HorizontalRuleNode extends DecoratorNode<Component> {
-  static getType(): string {
-    return 'horizontalrule'
-  }
-
-  static clone(node: HorizontalRuleNode): HorizontalRuleNode {
-    return new HorizontalRuleNode(node.__key)
-  }
-
-  static importJSON(
-    serializedNode: SerializedHorizontalRuleNode,
-  ): HorizontalRuleNode {
-    return $createHorizontalRuleNode().updateFromJSON(serializedNode)
-  }
-
-  static importDOM(): DOMConversionMap | null {
-    return {
-      hr: () => ({
-        conversion: $convertHorizontalRuleElement,
-        priority: 0,
-      }),
-    }
+export class HorizontalRuleNode extends BaseHorizontalRuleNode {
+  $config() {
+    return this.config('horizontalrule', {
+      importDOM: {
+        hr: () => ({
+          conversion: $convertHorizontalRuleElement,
+          priority: 0,
+        }),
+      },
+    })
   }
 
   decorate(): Component {
@@ -119,10 +109,4 @@ function $convertHorizontalRuleElement(): DOMConversionOutput {
  */
 export function $createHorizontalRuleNode(): HorizontalRuleNode {
   return $applyNodeReplacement(new HorizontalRuleNode())
-}
-
-export function $isHorizontalRuleNode(
-  node: LexicalNode | null | undefined,
-): node is HorizontalRuleNode {
-  return node instanceof HorizontalRuleNode
 }

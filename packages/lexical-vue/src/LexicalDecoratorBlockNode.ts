@@ -8,7 +8,7 @@ import type {
 } from 'lexical'
 
 import type { Component } from 'vue'
-import { DecoratorNode } from 'lexical'
+import { $getDocument, DecoratorNode } from 'lexical'
 
 export type SerializedDecoratorBlockNode = Spread<
   {
@@ -23,6 +23,11 @@ export class DecoratorBlockNode extends DecoratorNode<Component> {
   constructor(format?: ElementFormatType, key?: NodeKey) {
     super(key)
     this.__format = format || ''
+  }
+
+  afterCloneFrom(prevNode: this): void {
+    super.afterCloneFrom(prevNode)
+    this.__format = prevNode.__format
   }
 
   canIndent(): false {
@@ -54,8 +59,12 @@ export class DecoratorBlockNode extends DecoratorNode<Component> {
     return self
   }
 
+  getFormat(): ElementFormatType {
+    return this.getLatest().__format
+  }
+
   createDOM() {
-    return document.createElement('div')
+    return $getDocument().createElement('div')
   }
 
   updateDOM() {

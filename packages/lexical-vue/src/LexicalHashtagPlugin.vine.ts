@@ -1,13 +1,17 @@
-import type { HistoryState } from '@lexical/history'
+import { HashtagNode, registerLexicalHashtag } from '@lexical/hashtag'
+import { watchEffect } from 'vue'
 import { useLexicalComposer } from './LexicalComposer.vine'
-import { useHistory } from './shared/useHistory'
 
-export function HashtagPlugin(props: {
-  delay?: number
-  externalHistoryState?: HistoryState
-}) {
+export function HashtagPlugin() {
   const editor = useLexicalComposer()
-  useHistory(editor, () => props.externalHistoryState, () => props.delay)
+
+  watchEffect((onInvalidate) => {
+    if (!editor.hasNodes([HashtagNode])) {
+      throw new Error('HashtagPlugin: HashtagNode not registered on editor')
+    }
+
+    onInvalidate(registerLexicalHashtag(editor))
+  })
 
   return vine``
 }
